@@ -1,13 +1,13 @@
 # Jenkins Server MCP
 
-A Model Context Protocol (MCP) server that provides tools for interacting with Jenkins CI/CD servers. This server enables AI assistants to check build statuses, trigger builds, and retrieve build logs through a standardized interface.
+A Model Context Protocol (MCP) server that provides tools for interacting with Zerto Jenkins server. This server enables AI assistants to check build statuses, trigger builds, and retrieve build logs through a standardized interface.
 
 ## Installation
 
 1. Clone this repository:
 ```bash
-git clone https://github.com/prakashkumar-devarajan/jenkins-server-mcp.git
-cd jenkins-server-mcp
+git clone https://github.com/prakashkumar-devarajan/zerto-jenkins-mcp-server.git
+cd zerto-jenkins-mcp-server
 ```
 
 2. Install dependencies:
@@ -101,7 +101,7 @@ Windows: `.vscode/mcp.json`
           "C:\\Users\\devpraka\\mcp-servers\\jenkins-server-mcp\\build\\index.js"
         ],
         "env": {
-		      "NODE_EXTRA_CA_CERTS": "<Zerto ROOT CA>.crt",
+		  "NODE_EXTRA_CA_CERTS": "<Zerto ROOT CA>.crt",
           "JENKINS_URL": "https://your-jenkins-server.com",
           "JENKINS_USER": "your-username",
           "JENKINS_TOKEN": "your-api-token"
