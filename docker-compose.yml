@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  jenkins-mcp-server:
+    build: .
+    container_name: jenkins-mcp-server
+    environment:
+      - JENKINS_URL=https://zbuildsrv1.zerto.local:8443/
+      - JENKINS_USER=${JENKINS_USER}
+      - JENKINS_TOKEN=${JENKINS_TOKEN}
+      - NODE_EXTRA_CA_CERTS=/app/Zerto-Root-CA.crt
+    volumes:
+      - ./Zerto-Root-CA.crt:/app/Zerto-Root-CA.crt:ro
+    # Override CMD to keep container running without starting the server
+    command: tail -f /dev/null
+    restart: unless-stopped

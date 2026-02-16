@@ -20,6 +20,64 @@ npm install
 npm run build
 ```
 
+## Docker Deployment
+
+### Building the Docker Image
+
+```bash
+docker build -t jenkins-mcp-server .
+```
+
+### Running with Docker (Alternative)
+
+If you prefer not to use docker-compose, you can configure mcp.json to spawn containers on-demand:
+
+```json
+{
+  "servers": {
+    "jenkins-server-mcp": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "-e", "JENKINS_URL=https://your-jenkins-server.com",
+        "-e", "JENKINS_USER=your-username",
+        "-e", "JENKINS_TOKEN=your-api-token",
+        "-e", "NODE_EXTRA_CA_CERTS=/app/Zerto-Root-CA.crt",
+        "-v", "/path/to/Zerto-Root-CA.crt:/app/Zerto-Root-CA.crt:ro",
+        "jenkins-mcp-server"
+      ]
+    }
+  }
+}
+```
+
+### Using Docker Compose (Recommended)
+
+1. Create a `.env` file with your Jenkins credentials:
+```bash
+JENKINS_USER=your-username@example.com
+JENKINS_TOKEN=your-api-token
+```
+
+2. Start the container:
+```bash
+docker-compose up -d
+```
+
+3. Configure VS Code mcp.json to use the running container:
+```json
+{
+  "servers": {
+    "jenkins-server-mcp": {
+      "command": "docker",
+      "args": ["exec", "-i", "jenkins-mcp-server", "node", "build/index.js"]
+    }
+  }
+}
+```
+
+The container stays running in the background, and VS Code executes the MCP server when needed via `docker exec`.
+
 ## Configuration
 
 The server requires the following environment variables:
@@ -28,9 +86,9 @@ The server requires the following environment variables:
 - `JENKINS_USER`: Jenkins username for authentication
 - `JENKINS_TOKEN`: Jenkins API token for authentication
 
-Configure these in your MCP settings file:
+### Running Directly with Node.js (Without Docker)
 
-### For VS Code mcp.json file
+If you prefer not to use Docker, you can run the server directly with Node.js. Configure your VS Code mcp.json file:
 
 Windows: `.vscode/mcp.json`
 
@@ -43,7 +101,7 @@ Windows: `.vscode/mcp.json`
           "C:\\Users\\devpraka\\mcp-servers\\jenkins-server-mcp\\build\\index.js"
         ],
         "env": {
-		      "NODE_EXTRA_CA_CERTS": "<Jenkins ROOT CA>.crt",
+		      "NODE_EXTRA_CA_CERTS": "<Zerto ROOT CA>.crt",
           "JENKINS_URL": "https://your-jenkins-server.com",
           "JENKINS_USER": "your-username",
           "JENKINS_TOKEN": "your-api-token"
@@ -52,6 +110,8 @@ Windows: `.vscode/mcp.json`
     }
 }
 ```
+
+**Note:** Using Docker (see above) is recommended for easier dependency management and isolation.
 
 ## Tools and Usage
 
