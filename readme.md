@@ -20,6 +20,19 @@ npm install
 npm run build
 ```
 
+## Download the Zerto-Root-CA.crt Certificate
+
+1. **Via Browser:**
+   - Navigate to your Zerto Jenkins server URL in your browser
+   - Click on the padlock icon in the address bar
+   - Click "Certificate" or "Connection is secure" > "Certificate is valid"
+   - Go to the "Details" tab and select "Zerto Root CA"
+   - Click "Export" and save as `Zerto-Root-CA.crt`
+
+2. **Place the certificate:**
+   - Save the `Zerto-Root-CA.crt` file in your project directory or a secure location
+   - Note the full path to this file for configuration steps below
+
 ## Docker Deployment
 
 ### Building the Docker Image
@@ -98,10 +111,10 @@ Windows: `.vscode/mcp.json`
       "zerto-jenkins-server-mcp": {
         "command": "node",
         "args": [
-          "C:\\Users\\devpraka\\mcp-servers\\jenkins-server-mcp\\build\\index.js"
+          "C:\\Users\\devpraka\\mcp-servers\\zerto-jenkins-mcp-server\\build\\index.js"
         ],
         "env": {
-		  "NODE_EXTRA_CA_CERTS": "<Zerto ROOT CA>.crt",
+          "NODE_EXTRA_CA_CERTS": "C:\\Users\\devpraka\\mcp-servers\\zerto-jenkins-mcp-server\\Zerto-Root-CA.crt",
           "JENKINS_URL": "https://your-jenkins-server.com",
           "JENKINS_USER": "your-username",
           "JENKINS_TOKEN": "your-api-token"
