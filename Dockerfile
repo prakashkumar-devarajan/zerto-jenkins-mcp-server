@@ -4,16 +4,16 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 # Copy package files
-COPY package*.json ./
+COPY package.json ./
 COPY tsconfig.json ./
 
-# Copy source code (needed before npm ci because of prepare script)
+# Copy source code (needed before npm install because of prepare script)
 COPY src ./src
 
 # Install all dependencies (including dev dependencies for build)
-RUN npm ci
+RUN npm install
 
-# Build is handled by the prepare script in npm ci
+# Build is handled by the prepare script in npm install
 # But we'll run it explicitly to be sure
 RUN npm run build
 
@@ -22,11 +22,11 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
+# Copy built package.json and package-lock.json for production dependencies
+COPY --from=builder /app/package* ./
 
-# Install production dependencies only (skip prepare script since we copy built files)
-RUN npm ci --omit=dev --ignore-scripts
+# Install production dependencies only
+RUN npm install --omit=dev --ignore-scripts
 
 # Copy built application from builder stage
 COPY --from=builder /app/build ./build
