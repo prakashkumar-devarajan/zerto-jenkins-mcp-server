@@ -48,7 +48,7 @@ If you prefer not to use docker-compose, you can configure mcp.json to spawn con
 ```json
 {
   "servers": {
-    "jenkins-server-mcp": {
+    "jenkins-mcp-server": {
       "command": "docker",
       "args": [
         "run", "--rm", "-i",
@@ -81,7 +81,7 @@ docker-compose up -d
 ```json
 {
   "servers": {
-    "jenkins-server-mcp": {
+    "jenkins-mcp-server": {
       "command": "docker",
       "args": ["exec", "-i", "jenkins-mcp-server", "node", "build/index.js"]
     }
@@ -108,7 +108,7 @@ Windows: `.vscode/mcp.json`
 ```json
 {
     "servers": {
-      "zerto-jenkins-server-mcp": {
+      "jenkins-mcp-server": {
         "command": "node",
         "args": [
           "C:\\Users\\devpraka\\mcp-servers\\zerto-jenkins-mcp-server\\build\\index.js"
@@ -219,6 +219,13 @@ Get all Jenkins nodes (agents) and their status:
 const result = await mcpClient.useTool("jenkins-server", "get_all_nodes", {});
 ```
 
+Input Schema:
+```json
+{
+  // No input parameters required
+}
+```
+
 Returns information about all nodes including:
 - Display name
 - Online/offline status
@@ -234,6 +241,13 @@ Get all currently running builds across all Jenkins jobs:
 ```typescript
 // Example usage
 const result = await mcpClient.useTool("jenkins-server", "get_running_builds", {});
+```
+
+Input Schema:
+```json
+{
+  // No input parameters required
+}
 ```
 
 Returns:
