@@ -57,14 +57,25 @@ If you prefer not to use docker-compose, you can configure mcp.json to spawn con
         "-e", "JENKINS_TOKEN=your-api-token",
         "-e", "NODE_EXTRA_CA_CERTS=/app/Zerto-Root-CA.crt",
         "-v", "/path/to/Zerto-Root-CA.crt:/app/Zerto-Root-CA.crt:ro",
-        "jenkins-mcp-server"
+        "jenkins-mcp-server:2.0"
       ]
     }
   }
 }
 ```
 
-### Using Docker Compose (Recommended)
+### Transport Options
+
+The server supports two transport modes:
+
+| Mode | Use Case | Protocol | Configuration |
+|------|----------|----------|---------------|
+| **stdio** | Local development, VS Code integration | Standard I/O | `docker-compose.yml` |
+| **SSE/HTTP** | Remote access, web clients, multiple connections | Server-Sent Events | `docker-compose-http.yml` |
+
+### Option 1: stdio Mode (Docker Compose)
+
+Best for local VS Code integration where the MCP client spawns the server process.
 
 1. Create a `.env` file with your Jenkins credentials:
 ```bash
@@ -91,19 +102,64 @@ docker-compose up -d
 
 The container stays running in the background, and VS Code executes the MCP server when needed via `docker exec`.
 
+### Option 2: SSE/HTTP Mode (Docker Compose)
+
+Best for remote access, web-based MCP clients, or when you need multiple concurrent connections.
+
+1. Create a `.env` file with your Jenkins credentials:
+```bash
+JENKINS_USER=your-username@example.com
+JENKINS_TOKEN=your-api-token
+```
+
+2. Start the HTTP server:
+```bash
+docker-compose -f docker-compose-http.yml up -d
+```
+
+3. The server exposes:
+   - **Health check**: `http://localhost:3000/health`
+   - **SSE endpoint**: `http://localhost:3000/sse`
+   - **Message endpoint**: `POST http://localhost:3000/message?sessionId=<session>`
+
+4. Configure VS Code mcp.json for SSE:
+```json
+{
+  "servers": {
+    "jenkins-mcp-server": {
+      "type": "sse",
+      "url": "http://localhost:3000/sse"
+    }
+  }
+}
+```
+
+5. Verify the server is running:
+```bash
+# Check health
+curl http://localhost:3000/health
+
+# View logs
+docker-compose -f docker-compose-http.yml logs -f
+```
+
 ## Configuration
 
 The server requires the following environment variables:
 
-- `JENKINS_URL`: The URL of your Jenkins server
-- `JENKINS_USER`: Jenkins username for authentication
-- `JENKINS_TOKEN`: Jenkins API token for authentication
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `JENKINS_URL` | Yes | The URL of your Jenkins server |
+| `JENKINS_USER` | Yes | Jenkins username for authentication |
+| `JENKINS_TOKEN` | Yes | Jenkins API token for authentication |
+| `SERVER_MODE` | No | Transport mode: `stdio` (default) or `http` |
+| `PORT` | No | HTTP server port (default: `3000`, only used when `SERVER_MODE=http`) |
 
 ### Running Directly with Node.js (Without Docker)
 
-If you prefer not to use Docker, you can run the server directly with Node.js. Configure your VS Code mcp.json file:
+If you prefer not to use Docker, you can run the server directly with Node.js.
 
-Windows: `.vscode/mcp.json`
+#### stdio Mode (VS Code mcp.json)
 
 ```json
 {
@@ -119,6 +175,36 @@ Windows: `.vscode/mcp.json`
           "JENKINS_USER": "your-username",
           "JENKINS_TOKEN": "your-api-token"
         }
+      }
+    }
+}
+```
+
+#### SSE/HTTP Mode
+
+Start the server in HTTP mode:
+
+```bash
+# Set environment variables
+export JENKINS_URL=https://your-jenkins-server.com
+export JENKINS_USER=your-username
+export JENKINS_TOKEN=your-api-token
+export NODE_EXTRA_CA_CERTS=/path/to/Zerto-Root-CA.crt
+export SERVER_MODE=http
+export PORT=3000
+
+# Start the server
+node build/index.js
+```
+
+Then configure VS Code mcp.json:
+
+```json
+{
+    "servers": {
+      "jenkins-mcp-server": {
+        "type": "sse",
+        "url": "http://localhost:3000/sse"
       }
     }
 }

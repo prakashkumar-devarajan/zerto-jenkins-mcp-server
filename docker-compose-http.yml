@@ -1,14 +1,18 @@
 services:
   jenkins-mcp-server:
     build: .
-    container_name: jenkins-mcp-server
+    container_name: jenkins-mcp-server-http
     environment:
       - JENKINS_URL=https://zbuildsrv1.zerto.local:8443/
       - JENKINS_USER=${JENKINS_USER}
       - JENKINS_TOKEN=${JENKINS_TOKEN}
       - NODE_EXTRA_CA_CERTS=/app/Zerto-Root-CA.crt
+      - SERVER_MODE=http
+      - PORT=3000
     volumes:
       - ./Zerto-Root-CA.crt:/app/Zerto-Root-CA.crt:ro
-    # Keep container running without starting server
-    command: tail -f /dev/null
+    ports:
+      - "3000:3000"
+    extra_hosts:
+      - "zbuildsrv1.zerto.local:172.20.244.83"
     restart: unless-stopped
