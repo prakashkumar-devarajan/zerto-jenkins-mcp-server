@@ -4,8 +4,6 @@ services:
     container_name: jenkins-mcp-server-http
     environment:
       - JENKINS_URL=https://zbuildsrv1.zerto.local:8443/
-      - JENKINS_USER=${JENKINS_USER}
-      - JENKINS_TOKEN=${JENKINS_TOKEN}
       - NODE_EXTRA_CA_CERTS=/app/Zerto-Root-CA.crt
       - SERVER_MODE=http
       - PORT=3000

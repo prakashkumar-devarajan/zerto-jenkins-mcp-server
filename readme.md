@@ -104,44 +104,88 @@ The container stays running in the background, and VS Code executes the MCP serv
 
 ### Option 2: SSE/HTTP Mode (Docker Compose)
 
-Best for remote access, web-based MCP clients, or when you need multiple concurrent connections.
+Best for remote access, web-based MCP clients, or when you need multiple concurrent connections. **Users provide their own Jenkins credentials via HTTP Basic Auth.**
 
-1. Create a `.env` file with your Jenkins credentials:
-```bash
-JENKINS_USER=your-username@example.com
-JENKINS_TOKEN=your-api-token
-```
-
-2. Start the HTTP server:
+1. Start the HTTP server (no `.env` file needed for credentials):
 ```bash
 docker-compose -f docker-compose-http.yml up -d
 ```
 
-3. The server exposes:
+2. The server exposes:
    - **Health check**: `http://localhost:3000/health`
-   - **SSE endpoint**: `http://localhost:3000/sse`
+   - **SSE endpoint**: `http://localhost:3000/sse` (requires Basic Auth)
    - **Message endpoint**: `POST http://localhost:3000/message?sessionId=<session>`
 
-4. Configure VS Code mcp.json for SSE:
+3. **Generate your Basic Auth header**:
+
+   The Authorization header is Base64-encoded `username:api-token`. Generate it using one of these methods:
+
+   **PowerShell:**
+   ```powershell
+   [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("your-username@example.com:your-api-token"))
+   ```
+
+   **Bash/Linux:**
+   ```bash
+   echo -n "your-username@example.com:your-api-token" | base64
+   ```
+
+   **Node.js:**
+   ```javascript
+   Buffer.from("your-username@example.com:your-api-token").toString("base64")
+   ```
+
+   **Python:**
+   ```python
+   import base64
+   base64.b64encode(b"your-username@example.com:your-api-token").decode()
+   ```
+
+4. Configure VS Code mcp.json for SSE with the generated header:
 ```json
 {
   "servers": {
     "jenkins-mcp-server": {
       "type": "sse",
-      "url": "http://localhost:3000/sse"
+      "url": "http://localhost:3000/sse",
+      "headers": {
+        "Authorization": "Basic <your-base64-encoded-credentials>"
+      }
     }
   }
 }
 ```
 
-5. Verify the server is running:
+**Example** (for user `john@example.com` with token `abc123`):
+```json
+{
+  "servers": {
+    "jenkins-mcp-server": {
+      "type": "sse",
+      "url": "http://localhost:3000/sse",
+      "headers": {
+        "Authorization": "Basic am9obkBleGFtcGxlLmNvbTphYmMxMjM="
+      }
+    }
+  }
+}
+```
+
+5. Test with curl:
 ```bash
-# Check health
+curl -u "your-username:your-api-token" http://localhost:3000/sse
+```
+
+6. Verify the server is running:
+```bash
+# Check health (no auth required)
 curl http://localhost:3000/health
 
 # View logs
 docker-compose -f docker-compose-http.yml logs -f
 ```
+
+**Note:** You can optionally set `JENKINS_USER` and `JENKINS_TOKEN` in docker-compose as fallback credentials for users who don't provide Basic Auth.
 
 ## Configuration
 
@@ -150,8 +194,8 @@ The server requires the following environment variables:
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `JENKINS_URL` | Yes | The URL of your Jenkins server |
-| `JENKINS_USER` | Yes | Jenkins username for authentication |
-| `JENKINS_TOKEN` | Yes | Jenkins API token for authentication |
+| `JENKINS_USER` | stdio: Yes, http: No | Jenkins username (http mode uses Basic Auth from client) |
+| `JENKINS_TOKEN` | stdio: Yes, http: No | Jenkins API token (http mode uses Basic Auth from client) |
 | `SERVER_MODE` | No | Transport mode: `stdio` (default) or `http` |
 | `PORT` | No | HTTP server port (default: `3000`, only used when `SERVER_MODE=http`) |
 

@@ -329,6 +329,27 @@ class JenkinsServer {
     app.get('/sse', async (req, res) => {
       console.error('Client connected to SSE endpoint');
       
+      // Extract Basic Auth credentials
+      const authHeader = req.headers.authorization;
+      let jenkinsUser = JENKINS_USER;
+      let jenkinsToken = JENKINS_TOKEN;
+      
+      if (authHeader && authHeader.startsWith('Basic ')) {
+        const base64Credentials = authHeader.slice(6);
+        const credentials = Buffer.from(base64Credentials, 'base64').toString('utf-8');
+        const [user, token] = credentials.split(':');
+        if (user && token) {
+          jenkinsUser = user;
+          jenkinsToken = token;
+          console.error(`Using credentials for user: ${user}`);
+        }
+      } else if (!jenkinsUser || !jenkinsToken) {
+        console.error('No credentials provided and no default credentials configured');
+        res.status(401).setHeader('WWW-Authenticate', 'Basic realm="Jenkins MCP Server"');
+        res.json({ error: 'Authentication required. Provide Jenkins credentials via Basic Auth.' });
+        return;
+      }
+      
       try {
         // Create a new server instance for this connection
         const connectionServer = new Server(
@@ -343,12 +364,12 @@ class JenkinsServer {
           }
         );
 
-        // Create axios instance with same config
+        // Create axios instance with user's credentials
         const axiosInstance = axios.create({
           baseURL: JENKINS_URL,
           auth: {
-            username: JENKINS_USER,
-            password: JENKINS_TOKEN,
+            username: jenkinsUser,
+            password: jenkinsToken,
           },
         });
 
