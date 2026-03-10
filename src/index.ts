@@ -25,6 +25,19 @@ class JenkinsServer {
   private server: Server;
   private axiosInstance;
 
+  /**
+   * Normalize a job path so every segment is prefixed with /job/.
+   * Accepts any of these formats:
+   *   "ZVML"
+   *   "ZVML/zvml_builds/ZVML_Services"
+   *   "ZVML/job/zvml_builds/job/ZVML_Services"
+   *   "job/ZVML/job/zvml_builds/job/ZVML_Services"
+   */
+  private normalizeJobPath(jobPath: string): string {
+    const parts = jobPath.split('/').filter(p => p !== '' && p !== 'job');
+    return parts.map(p => `job/${p}`).join('/');
+  }
+
   constructor() {
     this.server = new Server(
       {
@@ -47,7 +60,7 @@ class JenkinsServer {
     });
 
     this.setupToolHandlers();
-    
+
     // Error handling
     this.server.onerror = (error) => console.error('[MCP Error]', error);
     process.on('SIGINT', async () => {
@@ -124,7 +137,7 @@ class JenkinsServer {
         },
       ],
     }));
-  
+
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       try {
         switch (request.params.name) {
@@ -155,8 +168,9 @@ class JenkinsServer {
 
   private async getBuildStatus(args: any) {
     const buildNumber = args.buildNumber || 'lastBuild';
+    const jobPath = this.normalizeJobPath(args.jobPath);
     const response = await this.axiosInstance.get<BuildStatus>(
-      `/${args.jobPath}/${buildNumber}/api/json`
+      `/${jobPath}/${buildNumber}/api/json`
     );
 
     return {
@@ -176,8 +190,9 @@ class JenkinsServer {
   }
 
   private async getBuildLog(args: any) {
+    const jobPath = this.normalizeJobPath(args.jobPath);
     const response = await this.axiosInstance.get(
-      `/${args.jobPath}/${args.buildNumber}/consoleText`
+      `/${jobPath}/${args.buildNumber}/consoleText`
     );
 
     return {
@@ -189,7 +204,7 @@ class JenkinsServer {
       ],
     };
   }
-  
+
   private async getCrumb() {
     const response = await this.axiosInstance.get('/crumbIssuer/api/json');
     return response.data.crumb;
@@ -203,25 +218,26 @@ class JenkinsServer {
         params.append(key, String(value));
       });
     }
-  
+
+    const jobPath = this.normalizeJobPath(args.jobPath);
     const endpoint = args.parameters ? 'buildWithParameters' : 'build';
-    await this.axiosInstance.post(`/${args.jobPath}/${endpoint}`, params, {
+    await this.axiosInstance.post(`/${jobPath}/${endpoint}`, params, {
       headers: { 'Jenkins-Crumb': crumb },
     });
-  
+
     return {
       content: [{ type: 'text', text: `Job "${args.jobPath}" triggered successfully` }],
     };
   }
-  
+
   private async searchJobs(args: any) {
     const response = await this.axiosInstance.get('/api/json?tree=jobs[name,url]');
     const jobs = response.data.jobs || [];
-    
+
     const matches = jobs.filter((job: any) =>
       job.name.toLowerCase().includes(args.query.toLowerCase())
     );
-    
+
     return {
       content: [
         {
@@ -235,7 +251,7 @@ class JenkinsServer {
   private async getAllNodes(args: any) {
     const response = await this.axiosInstance.get('/computer/api/json?tree=computer[displayName,offline,idle,temporarilyOffline,offlineCauseReason,numExecutors,monitorData[*]]');
     const nodes = response.data.computer || [];
-    
+
     const nodeInfo = nodes.map((node: any) => ({
       displayName: node.displayName,
       offline: node.offline,
@@ -244,7 +260,7 @@ class JenkinsServer {
       offlineCauseReason: node.offlineCauseReason || null,
       numExecutors: node.numExecutors,
     }));
-    
+
     return {
       content: [
         {
@@ -259,9 +275,9 @@ class JenkinsServer {
     // Get all executors and their current builds from all nodes
     const response = await this.axiosInstance.get('/computer/api/json?tree=computer[displayName,executors[currentExecutable[url,fullDisplayName,timestamp,estimatedDuration]]]');
     const computers = response.data.computer || [];
-    
+
     const runningBuilds: any[] = [];
-    
+
     // Collect all running builds from all executors
     computers.forEach((computer: any) => {
       if (computer.executors && computer.executors.length > 0) {
@@ -279,7 +295,7 @@ class JenkinsServer {
         });
       }
     });
-    
+
     return {
       content: [
         {
