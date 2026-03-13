@@ -1,12 +1,15 @@
 #!/usr/bin/env node
+import { randomUUID } from 'node:crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   CallToolRequestSchema,
   ErrorCode,
   ListToolsRequestSchema,
   McpError,
+  isInitializeRequest,
 } from '@modelcontextprotocol/sdk/types.js';
 import axios from 'axios';
 import express from 'express';
@@ -67,7 +70,7 @@ class JenkinsServer {
           inputSchema: {
             type: 'object',
             properties: {
-              jobPath: { type: 'string', description: 'Path to the Jenkins job' },
+              jobPath: { type: 'string', description: 'Path to the Jenkins job (e.g. "ZVML/zvml-build-release/10.10")' },
               buildNumber: { type: 'string', description: 'Build number or "lastBuild"' },
             },
             required: ['jobPath'],
@@ -75,12 +78,14 @@ class JenkinsServer {
         },
         {
           name: 'get_build_log',
-          description: 'Get the console output of a Jenkins build',
+          description: 'Get the console output of a Jenkins build. Returns paginated results (default 500 lines). Use startLine to paginate.',
           inputSchema: {
             type: 'object',
             properties: {
-              jobPath: { type: 'string' },
+              jobPath: { type: 'string', description: 'Path to the Jenkins job (e.g. "ZVML/zvml-build-release/10.10")' },
               buildNumber: { type: 'string' },
+              startLine: { type: 'number', description: 'Line offset to start from (default: 0)' },
+              maxLines: { type: 'number', description: 'Max lines to return (default: 500)' },
             },
             required: ['jobPath', 'buildNumber'],
           },
@@ -91,7 +96,7 @@ class JenkinsServer {
           inputSchema: {
             type: 'object',
             properties: {
-              jobPath: { type: 'string', description: 'Path to the Jenkins job' },
+              jobPath: { type: 'string', description: 'Path to the Jenkins job (e.g. "ZVML/zvml-build-release/10.10")' },
               parameters: { type: 'object', description: 'Optional build parameters', additionalProperties: true },
             },
             required: ['jobPath'],
@@ -155,10 +160,19 @@ class JenkinsServer {
     });
   }
 
+  private normalizeJobPath(jobPath: string): string {
+    // If already in Jenkins URL format (starts with job/), return as-is
+    if (jobPath.startsWith('job/')) return jobPath;
+    // Convert simple path like "ZVML/zvml-build-release/10.10"
+    // to Jenkins format "job/ZVML/job/zvml-build-release/job/10.10"
+    return jobPath.split('/').map(segment => `job/${segment}`).join('/');
+  }
+
   private async getBuildStatus(args: any, axiosInstance: any) {
     const buildNumber = args.buildNumber || 'lastBuild';
+    const jobPath = this.normalizeJobPath(args.jobPath);
     const response = await axiosInstance.get(
-      `/${args.jobPath}/${buildNumber}/api/json`
+      `/${jobPath}/${buildNumber}/api/json`
     );
 
     return {
@@ -178,15 +192,35 @@ class JenkinsServer {
   }
 
   private async getBuildLog(args: any, axiosInstance: any) {
+    const jobPath = this.normalizeJobPath(args.jobPath);
     const response = await axiosInstance.get(
-      `/${args.jobPath}/${args.buildNumber}/consoleText`
+      `/${jobPath}/${args.buildNumber}/consoleText`
     );
+
+    const MAX_LINES = args.maxLines || 500;
+    const startLine = args.startLine || 0;
+    const fullLog: string = typeof response.data === 'string' ? response.data : String(response.data);
+    const lines = fullLog.split('\n');
+    const totalLines = lines.length;
+    const sliced = lines.slice(startLine, startLine + MAX_LINES);
+    const truncated = totalLines > startLine + MAX_LINES;
 
     return {
       content: [
         {
           type: 'text',
-          text: response.data,
+          text: sliced.join('\n'),
+        },
+        {
+          type: 'text',
+          text: JSON.stringify({
+            totalLines,
+            returnedLines: sliced.length,
+            startLine,
+            endLine: startLine + sliced.length,
+            truncated,
+            hint: truncated ? `Use startLine=${startLine + MAX_LINES} to get next page` : undefined,
+          }),
         },
       ],
     };
@@ -199,6 +233,7 @@ class JenkinsServer {
 
   private async buildJob(args: any, axiosInstance: any) {
     const crumb = await this.getCrumb(axiosInstance);
+    const jobPath = this.normalizeJobPath(args.jobPath);
     const params = new URLSearchParams();
     if (args.parameters) {
       Object.entries(args.parameters).forEach(([key, value]) => {
@@ -207,7 +242,7 @@ class JenkinsServer {
     }
   
     const endpoint = args.parameters ? 'buildWithParameters' : 'build';
-    await axiosInstance.post(`/${args.jobPath}/${endpoint}`, params, {
+    await axiosInstance.post(`/${jobPath}/${endpoint}`, params, {
       headers: { 'Jenkins-Crumb': crumb },
     });
   
@@ -235,7 +270,7 @@ class JenkinsServer {
   }
 
   private async getAllNodes(args: any, axiosInstance: any) {
-    const response = await axiosInstance.get('/computer/api/json?tree=computer[displayName,offline,idle,temporarilyOffline,offlineCauseReason,numExecutors,monitorData[*]]');
+    const response = await axiosInstance.get('/computer/api/json?tree=computer[displayName,offline,idle,temporarilyOffline,offlineCauseReason,numExecutors]');
     const nodes = response.data.computer || [];
     
     const nodeInfo = nodes.map((node: any) => ({
@@ -246,12 +281,18 @@ class JenkinsServer {
       offlineCauseReason: node.offlineCauseReason || null,
       numExecutors: node.numExecutors,
     }));
+
+    const summary = {
+      total: nodeInfo.length,
+      online: nodeInfo.filter((n: any) => !n.offline).length,
+      offline: nodeInfo.filter((n: any) => n.offline).length,
+    };
     
     return {
       content: [
         {
           type: 'text',
-          text: JSON.stringify(nodeInfo, null, 2),
+          text: JSON.stringify({ summary, nodes: nodeInfo }),
         },
       ],
     };
@@ -316,7 +357,8 @@ class JenkinsServer {
     const PORT = process.env.PORT || 3000;
 
     // Store active transports by session ID
-    const transports = new Map<string, SSEServerTransport>();
+    const sseTransports = new Map<string, SSEServerTransport>();
+    const streamableTransports = new Map<string, { transport: StreamableHTTPServerTransport; server: Server }>();
 
     // Note: Do NOT use express.json() globally - SSEServerTransport needs raw body stream
 
@@ -325,30 +367,97 @@ class JenkinsServer {
       res.json({ status: 'ok', server: 'jenkins-mcp-server' });
     });
 
+    // Streamable HTTP endpoint (recommended MCP transport)
+    app.all('/mcp', express.json({ limit: '1mb' }), async (req, res) => {
+      const headerSessionId = req.headers['mcp-session-id'];
+      const sessionId = Array.isArray(headerSessionId) ? headerSessionId[0] : headerSessionId;
+
+      try {
+        let connection = sessionId ? streamableTransports.get(sessionId) : undefined;
+
+        if (!connection) {
+          if (req.method !== 'POST' || !isInitializeRequest(req.body)) {
+            res.status(400).json({
+              jsonrpc: '2.0',
+              error: {
+                code: -32000,
+                message: 'Bad Request: No valid MCP session ID provided',
+              },
+              id: null,
+            });
+            return;
+          }
+
+          const credentials = this.resolveJenkinsCredentials(req.headers.authorization, res);
+          if (!credentials) return;
+
+          const connectionServer = new Server(
+            {
+              name: 'jenkins-server',
+              version: '0.1.0',
+            },
+            {
+              capabilities: {
+                tools: {},
+              },
+            }
+          );
+
+          const axiosInstance = axios.create({
+            baseURL: JENKINS_URL,
+            auth: {
+              username: credentials.jenkinsUser,
+              password: credentials.jenkinsToken,
+            },
+          });
+
+          this.setupToolHandlersForConnection(connectionServer, axiosInstance);
+          connectionServer.onerror = (error) => {
+            console.error('[Streamable HTTP Connection Error]', error);
+          };
+
+          const transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: () => randomUUID(),
+            onsessioninitialized: (newSessionId) => {
+              streamableTransports.set(newSessionId, { transport, server: connectionServer });
+              console.error(`Streamable HTTP session ${newSessionId} registered`);
+            },
+          });
+
+          transport.onclose = () => {
+            const closedSessionId = transport.sessionId;
+            if (closedSessionId) {
+              streamableTransports.delete(closedSessionId);
+              console.error(`Streamable HTTP session ${closedSessionId} closed`);
+            }
+          };
+
+          await connectionServer.connect(transport);
+          connection = { transport, server: connectionServer };
+        }
+
+        await connection.transport.handleRequest(req, res, req.body);
+      } catch (error) {
+        console.error('Error handling streamable MCP request:', error);
+        if (!res.headersSent) {
+          res.status(500).json({
+            jsonrpc: '2.0',
+            error: {
+              code: -32603,
+              message: 'Internal server error',
+            },
+            id: null,
+          });
+        }
+      }
+    });
+
     // SSE endpoint for MCP
     app.get('/sse', async (req, res) => {
       console.error('Client connected to SSE endpoint');
-      
-      // Extract Basic Auth credentials
-      const authHeader = req.headers.authorization;
-      let jenkinsUser = JENKINS_USER;
-      let jenkinsToken = JENKINS_TOKEN;
-      
-      if (authHeader && authHeader.startsWith('Basic ')) {
-        const base64Credentials = authHeader.slice(6);
-        const credentials = Buffer.from(base64Credentials, 'base64').toString('utf-8');
-        const [user, token] = credentials.split(':');
-        if (user && token) {
-          jenkinsUser = user;
-          jenkinsToken = token;
-          console.error(`Using credentials for user: ${user}`);
-        }
-      } else if (!jenkinsUser || !jenkinsToken) {
-        console.error('No credentials provided and no default credentials configured');
-        res.status(401).setHeader('WWW-Authenticate', 'Basic realm="Jenkins MCP Server"');
-        res.json({ error: 'Authentication required. Provide Jenkins credentials via Basic Auth.' });
-        return;
-      }
+
+      const credentials = this.resolveJenkinsCredentials(req.headers.authorization, res);
+      if (!credentials) return;
       
       try {
         // Create a new server instance for this connection
@@ -368,8 +477,8 @@ class JenkinsServer {
         const axiosInstance = axios.create({
           baseURL: JENKINS_URL,
           auth: {
-            username: jenkinsUser,
-            password: jenkinsToken,
+            username: credentials.jenkinsUser,
+            password: credentials.jenkinsToken,
           },
         });
 
@@ -386,7 +495,7 @@ class JenkinsServer {
         
         // Store transport for message routing
         const sessionId = transport.sessionId;
-        transports.set(sessionId, transport);
+        sseTransports.set(sessionId, transport);
         console.error(`Session ${sessionId} registered`);
         
         console.error('Connecting server to transport...');
@@ -396,8 +505,8 @@ class JenkinsServer {
         // Handle client disconnect
         req.on('close', () => {
           console.error(`Client disconnected from SSE endpoint (session: ${sessionId})`);
-          transports.delete(sessionId);
-          connectionServer.close().catch(err => console.error('Error closing server:', err));
+          sseTransports.delete(sessionId);
+          transport.close().catch(err => console.error('Error closing SSE transport:', err));
         });
       } catch (error) {
         console.error('Error setting up SSE connection:', error);
@@ -412,7 +521,7 @@ class JenkinsServer {
       const sessionId = req.query.sessionId as string;
       console.error(`Received message for session: ${sessionId}`);
       
-      const transport = transports.get(sessionId);
+      const transport = sseTransports.get(sessionId);
       if (!transport) {
         console.error(`No transport found for session: ${sessionId}`);
         res.status(404).json({ error: 'Session not found' });
@@ -431,8 +540,35 @@ class JenkinsServer {
 
     app.listen(PORT, () => {
       console.error(`Jenkins MCP server running on http://0.0.0.0:${PORT}`);
+      console.error(`Streamable HTTP endpoint: http://0.0.0.0:${PORT}/mcp`);
       console.error(`SSE endpoint: http://0.0.0.0:${PORT}/sse`);
     });
+  }
+
+  private resolveJenkinsCredentials(
+    authHeader: string | undefined,
+    res: express.Response
+  ): { jenkinsUser: string; jenkinsToken: string } | null {
+    let jenkinsUser = JENKINS_USER;
+    let jenkinsToken = JENKINS_TOKEN;
+
+    if (authHeader && authHeader.startsWith('Basic ')) {
+      const base64Credentials = authHeader.slice(6);
+      const credentials = Buffer.from(base64Credentials, 'base64').toString('utf-8');
+      const [user, token] = credentials.split(':');
+      if (user && token) {
+        jenkinsUser = user;
+        jenkinsToken = token;
+        console.error(`Using credentials for user: ${user}`);
+      }
+    } else if (!jenkinsUser || !jenkinsToken) {
+      console.error('No credentials provided and no default credentials configured');
+      res.status(401).setHeader('WWW-Authenticate', 'Basic realm="Jenkins MCP Server"');
+      res.json({ error: 'Authentication required. Provide Jenkins credentials via Basic Auth.' });
+      return null;
+    }
+
+    return { jenkinsUser, jenkinsToken };
   }
 
   private setupToolHandlersForConnection(server: Server, axiosInstance: any) {
@@ -444,7 +580,7 @@ class JenkinsServer {
           inputSchema: {
             type: 'object',
             properties: {
-              jobPath: { type: 'string', description: 'Path to the Jenkins job' },
+              jobPath: { type: 'string', description: 'Path to the Jenkins job (e.g. "ZVML/zvml-build-release/10.10")' },
               buildNumber: { type: 'string', description: 'Build number or "lastBuild"' },
             },
             required: ['jobPath'],
@@ -452,12 +588,14 @@ class JenkinsServer {
         },
         {
           name: 'get_build_log',
-          description: 'Get the console output of a Jenkins build',
+          description: 'Get the console output of a Jenkins build. Returns paginated results (default 500 lines). Use startLine to paginate.',
           inputSchema: {
             type: 'object',
             properties: {
-              jobPath: { type: 'string' },
+              jobPath: { type: 'string', description: 'Path to the Jenkins job (e.g. "ZVML/zvml-build-release/10.10")' },
               buildNumber: { type: 'string' },
+              startLine: { type: 'number', description: 'Line offset to start from (default: 0)' },
+              maxLines: { type: 'number', description: 'Max lines to return (default: 500)' },
             },
             required: ['jobPath', 'buildNumber'],
           },
@@ -468,7 +606,7 @@ class JenkinsServer {
           inputSchema: {
             type: 'object',
             properties: {
-              jobPath: { type: 'string', description: 'Path to the Jenkins job' },
+              jobPath: { type: 'string', description: 'Path to the Jenkins job (e.g. "ZVML/zvml-build-release/10.10")' },
               parameters: { type: 'object', description: 'Optional build parameters', additionalProperties: true },
             },
             required: ['jobPath'],

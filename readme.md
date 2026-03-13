@@ -71,7 +71,7 @@ The server supports two transport modes:
 | Mode | Use Case | Protocol | Configuration |
 |------|----------|----------|---------------|
 | **stdio** | Local development, VS Code integration | Standard I/O | `docker-compose.yml` |
-| **SSE/HTTP** | Remote access, web clients, multiple connections | Server-Sent Events | `docker-compose-http.yml` |
+| **HTTP** | Remote access, web clients, multiple connections | Streamable HTTP (recommended) | `docker-compose-http.yml` |
 
 ### Option 1: stdio Mode (Docker Compose)
 
@@ -102,7 +102,7 @@ docker-compose up -d
 
 The container stays running in the background, and VS Code executes the MCP server when needed via `docker exec`.
 
-### Option 2: SSE/HTTP Mode (Docker Compose)
+### Option 2: HTTP Mode (Docker Compose)
 
 Best for remote access, web-based MCP clients, or when you need multiple concurrent connections. **Users provide their own Jenkins credentials via HTTP Basic Auth.**
 
@@ -113,8 +113,9 @@ docker-compose -f docker-compose-http.yml up -d
 
 2. The server exposes:
    - **Health check**: `http://localhost:3000/health`
-   - **SSE endpoint**: `http://localhost:3000/sse` (requires Basic Auth)
-   - **Message endpoint**: `POST http://localhost:3000/message?sessionId=<session>`
+  - **Streamable HTTP endpoint**: `http://localhost:3000/mcp` (requires Basic Auth)
+  - **Legacy SSE endpoint** (compatibility): `http://localhost:3000/sse`
+  - **Legacy SSE message endpoint** (compatibility): `POST http://localhost:3000/message?sessionId=<session>`
 
 3. **Generate your Basic Auth header**:
 
@@ -141,13 +142,13 @@ docker-compose -f docker-compose-http.yml up -d
    base64.b64encode(b"your-username@example.com:your-api-token").decode()
    ```
 
-4. Configure VS Code mcp.json for SSE with the generated header:
+4. Configure VS Code mcp.json for Streamable HTTP with the generated header:
 ```json
 {
   "servers": {
     "jenkins-mcp-server": {
-      "type": "sse",
-      "url": "http://localhost:3000/sse",
+      "type": "http",
+      "url": "http://localhost:3000/mcp",
       "headers": {
         "Authorization": "Basic <your-base64-encoded-credentials>"
       }
@@ -161,8 +162,8 @@ docker-compose -f docker-compose-http.yml up -d
 {
   "servers": {
     "jenkins-mcp-server": {
-      "type": "sse",
-      "url": "http://localhost:3000/sse",
+      "type": "http",
+      "url": "http://localhost:3000/mcp",
       "headers": {
         "Authorization": "Basic am9obkBleGFtcGxlLmNvbTphYmMxMjM="
       }
@@ -173,7 +174,11 @@ docker-compose -f docker-compose-http.yml up -d
 
 5. Test with curl:
 ```bash
-curl -u "your-username:your-api-token" http://localhost:3000/sse
+curl -u "your-username:your-api-token" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-05","capabilities":{},"clientInfo":{"name":"curl-test","version":"1.0.0"}}}' \
+  http://localhost:3000/mcp
 ```
 
 6. Verify the server is running:
@@ -224,7 +229,7 @@ If you prefer not to use Docker, you can run the server directly with Node.js.
 }
 ```
 
-#### SSE/HTTP Mode
+#### HTTP Mode
 
 Start the server in HTTP mode:
 
@@ -242,6 +247,19 @@ node build/index.js
 ```
 
 Then configure VS Code mcp.json:
+
+```json
+{
+    "servers": {
+      "jenkins-mcp-server": {
+        "type": "http",
+        "url": "http://localhost:3000/mcp"
+      }
+    }
+}
+```
+
+To use legacy SSE clients, configure:
 
 ```json
 {
