@@ -1,7 +1,7 @@
 services:
   jenkins-mcp-server:
     build: .
-    container_name: jenkins-mcp-server
+    container_name: jenkins-mcp-server-stdio
     environment:
       - JENKINS_URL=https://zbuildsrv1.zerto.local:8443/
       - JENKINS_USER=${JENKINS_USER}

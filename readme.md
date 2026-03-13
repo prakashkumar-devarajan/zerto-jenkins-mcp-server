@@ -85,7 +85,7 @@ JENKINS_TOKEN=your-api-token
 
 2. Start the container:
 ```bash
-docker-compose up -d
+docker-compose up -d --build
 ```
 
 3. Configure VS Code mcp.json to use the running container:
@@ -94,7 +94,7 @@ docker-compose up -d
   "servers": {
     "jenkins-mcp-server": {
       "command": "docker",
-      "args": ["exec", "-i", "jenkins-mcp-server", "node", "build/index.js"]
+      "args": ["exec", "-i", "jenkins-mcp-server-stdio", "node", "build/index.js"]
     }
   }
 }
@@ -108,7 +108,7 @@ Best for remote access, web-based MCP clients, or when you need multiple concurr
 
 1. Start the HTTP server (no `.env` file needed for credentials):
 ```bash
-docker-compose -f docker-compose-http.yml up -d
+docker-compose -f docker-compose-http.yml up -d --build
 ```
 
 2. The server exposes:
