@@ -433,6 +433,19 @@ class JenkinsServer {
           connection = { transport, server: connectionServer };
         }
 
+        // For GET requests (SSE stream), start heartbeat BEFORE handleRequest
+        // because handleRequest never returns for GET (it keeps the SSE stream open)
+        if (req.method === 'GET') {
+          const heartbeat = setInterval(() => {
+            if (!res.writableEnded) {
+              res.write(':ping\n\n');
+            } else {
+              clearInterval(heartbeat);
+            }
+          }, 30000);
+          req.on('close', () => clearInterval(heartbeat));
+        }
+
         await connection.transport.handleRequest(req, res, req.body);
       } catch (error) {
         console.error('Error handling streamable MCP request:', error);
@@ -449,10 +462,14 @@ class JenkinsServer {
       }
     });
 
-    app.listen(PORT, () => {
+    const httpServer = app.listen(PORT, () => {
       console.error(`Jenkins MCP server running on http://0.0.0.0:${PORT}`);
       console.error(`Streamable HTTP endpoint: http://0.0.0.0:${PORT}/mcp`);
-    })
+    });
+
+    // Disable timeouts that kill long-lived SSE streams
+    httpServer.requestTimeout = 0;
+    httpServer.keepAliveTimeout = 0;
   }
 
   private resolveJenkinsCredentials(
