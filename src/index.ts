@@ -538,11 +538,15 @@ class JenkinsServer {
       }
     });
 
-    app.listen(PORT, () => {
+    const httpServer = app.listen(PORT, () => {
       console.error(`Jenkins MCP server running on http://0.0.0.0:${PORT}`);
       console.error(`Streamable HTTP endpoint: http://0.0.0.0:${PORT}/mcp`);
       console.error(`SSE endpoint: http://0.0.0.0:${PORT}/sse`);
     });
+
+    // Increase timeouts to prevent SSE stream disconnects
+    httpServer.keepAliveTimeout = 10 * 60 * 1000; // 10 minutes
+    httpServer.headersTimeout = 11 * 60 * 1000;   // 11 minutes (must be > keepAliveTimeout)
   }
 
   private resolveJenkinsCredentials(
