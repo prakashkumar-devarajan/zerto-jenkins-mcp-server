@@ -2,7 +2,6 @@
 import { randomUUID } from 'node:crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   CallToolRequestSchema,
@@ -357,10 +356,7 @@ class JenkinsServer {
     const PORT = process.env.PORT || 3000;
 
     // Store active transports by session ID
-    const sseTransports = new Map<string, SSEServerTransport>();
     const streamableTransports = new Map<string, { transport: StreamableHTTPServerTransport; server: Server }>();
-
-    // Note: Do NOT use express.json() globally - SSEServerTransport needs raw body stream
 
     // Health check endpoint
     app.get('/health', (req, res) => {
@@ -418,6 +414,7 @@ class JenkinsServer {
 
           const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => randomUUID(),
+            enableJsonResponse: true,
             onsessioninitialized: (newSessionId) => {
               streamableTransports.set(newSessionId, { transport, server: connectionServer });
               console.error(`Streamable HTTP session ${newSessionId} registered`);
@@ -452,101 +449,10 @@ class JenkinsServer {
       }
     });
 
-    // SSE endpoint for MCP
-    app.get('/sse', async (req, res) => {
-      console.error('Client connected to SSE endpoint');
-
-      const credentials = this.resolveJenkinsCredentials(req.headers.authorization, res);
-      if (!credentials) return;
-      
-      try {
-        // Create a new server instance for this connection
-        const connectionServer = new Server(
-          {
-            name: 'jenkins-server',
-            version: '0.1.0',
-          },
-          {
-            capabilities: {
-              tools: {},
-            },
-          }
-        );
-
-        // Create axios instance with user's credentials
-        const axiosInstance = axios.create({
-          baseURL: JENKINS_URL,
-          auth: {
-            username: credentials.jenkinsUser,
-            password: credentials.jenkinsToken,
-          },
-        });
-
-        // Setup handlers for this connection
-        this.setupToolHandlersForConnection(connectionServer, axiosInstance);
-        
-        // Setup error handler
-        connectionServer.onerror = (error) => {
-          console.error('[SSE Connection Error]', error);
-        };
-        
-        console.error('Creating SSE transport...');
-        const transport = new SSEServerTransport('/message', res);
-        
-        // Store transport for message routing
-        const sessionId = transport.sessionId;
-        sseTransports.set(sessionId, transport);
-        console.error(`Session ${sessionId} registered`);
-        
-        console.error('Connecting server to transport...');
-        await connectionServer.connect(transport);
-        console.error('Server connected successfully via SSE');
-        
-        // Handle client disconnect
-        req.on('close', () => {
-          console.error(`Client disconnected from SSE endpoint (session: ${sessionId})`);
-          sseTransports.delete(sessionId);
-          transport.close().catch(err => console.error('Error closing SSE transport:', err));
-        });
-      } catch (error) {
-        console.error('Error setting up SSE connection:', error);
-        if (!res.headersSent) {
-          res.status(500).end();
-        }
-      }
-    });
-
-    // POST endpoint for receiving messages from clients
-    app.post('/message', async (req, res) => {
-      const sessionId = req.query.sessionId as string;
-      console.error(`Received message for session: ${sessionId}`);
-      
-      const transport = sseTransports.get(sessionId);
-      if (!transport) {
-        console.error(`No transport found for session: ${sessionId}`);
-        res.status(404).json({ error: 'Session not found' });
-        return;
-      }
-
-      try {
-        await transport.handlePostMessage(req, res);
-      } catch (error) {
-        console.error('Error handling message:', error);
-        if (!res.headersSent) {
-          res.status(500).json({ error: 'Failed to handle message' });
-        }
-      }
-    });
-
-    const httpServer = app.listen(PORT, () => {
+    app.listen(PORT, () => {
       console.error(`Jenkins MCP server running on http://0.0.0.0:${PORT}`);
       console.error(`Streamable HTTP endpoint: http://0.0.0.0:${PORT}/mcp`);
-      console.error(`SSE endpoint: http://0.0.0.0:${PORT}/sse`);
-    });
-
-    // Increase timeouts to prevent SSE stream disconnects
-    httpServer.keepAliveTimeout = 10 * 60 * 1000; // 10 minutes
-    httpServer.headersTimeout = 11 * 60 * 1000;   // 11 minutes (must be > keepAliveTimeout)
+    })
   }
 
   private resolveJenkinsCredentials(
