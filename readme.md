@@ -1,6 +1,6 @@
 # Jenkins Server MCP
 
-A Model Context Protocol (MCP) server that provides tools for interacting with Zerto Jenkins server. This server enables AI assistants to check build statuses, trigger builds, and retrieve build logs through a standardized interface.
+A Model Context Protocol (MCP) server that provides tools for interacting with Zerto Jenkins server. This server enables AI assistants to check build statuses, trigger builds, retrieve build logs, and leverage GitHub Copilot to automatically analyze console output — identifying errors, failure reasons, and stack traces — through a standardized interface.
 
 ## Installation
 

@@ -128,6 +128,32 @@ class JenkinsServer {
             properties: {},
           },
         },
+        {
+          name: 'get_build_changes',
+          description: 'Get the list of commits/changesets included in a specific Jenkins build',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              jobPath: { type: 'string', description: 'Path to the Jenkins job (e.g. "ZVML/zvml-build-release/10.10")' },
+              buildNumber: { type: 'string', description: 'Build number or "lastBuild"' },
+            },
+            required: ['jobPath'],
+          },
+        },
+        {
+          name: 'find_culprit_commit',
+          description: 'Find the commit(s) that likely caused a build failure. Walks back through builds with the same parameters to find the last successful baseline, then collects all commits introduced since. Optionally traverses downstream Pipeline jobs (triggered via "build job:") by matching the UpstreamCause to find which downstream build failed and what commits it introduced.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              jobPath: { type: 'string', description: 'Path to the Jenkins job (e.g. "ZVML/zvml-build-release/10.10")' },
+              buildNumber: { type: 'string', description: 'The failing build number or "lastBuild" (default: lastBuild)' },
+              maxBuildsToSearch: { type: 'number', description: 'Max number of previous builds to walk back through (default: 20)' },
+              downstreamJobPaths: { type: 'array', items: { type: 'string' }, description: 'Optional list of downstream job paths to inspect (e.g. ["ZVML/zvml-downstreams/zvml-build-frontend", "ZVML/zvml-downstreams/zvml-build-datapath"]). For each, the tool finds the build triggered by the failing parent via UpstreamCause, and if it failed, collects its suspect commits.' },
+            },
+            required: ['jobPath'],
+          },
+        },
       ],
     }));
   
@@ -146,6 +172,10 @@ class JenkinsServer {
             return await this.getAllNodes(request.params.arguments, this.axiosInstance);
           case 'get_running_builds':
             return await this.getRunningBuilds(request.params.arguments, this.axiosInstance);
+          case 'get_build_changes':
+            return await this.getBuildChanges(request.params.arguments, this.axiosInstance);
+          case 'find_culprit_commit':
+            return await this.findCulpritCommit(request.params.arguments, this.axiosInstance);
           default:
             throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
         }
@@ -170,20 +200,31 @@ class JenkinsServer {
   private async getBuildStatus(args: any, axiosInstance: any) {
     const buildNumber = args.buildNumber || 'lastBuild';
     const jobPath = this.normalizeJobPath(args.jobPath);
-    const response = await axiosInstance.get(
-      `/${jobPath}/${buildNumber}/api/json`
-    );
+
+    // Fetch job-level info (disabled flag) and build info in parallel
+    const [jobResponse, buildResponse] = await Promise.all([
+      axiosInstance.get(`/${jobPath}/api/json?tree=disabled,buildable,color`),
+      axiosInstance.get(`/${jobPath}/${buildNumber}/api/json`),
+    ]);
+
+    const jobData = jobResponse.data;
+    // A job is inactive if explicitly disabled OR not buildable OR color is "disabled"
+    const disabled: boolean =
+      jobData.disabled === true ||
+      jobData.buildable === false ||
+      jobData.color === 'disabled';
 
     return {
       content: [
         {
           type: 'text',
           text: JSON.stringify({
-            building: response.data.building,
-            result: response.data.result,
-            timestamp: response.data.timestamp,
-            duration: response.data.duration,
-            url: response.data.url,
+            disabled: disabled,
+            building: buildResponse.data.building,
+            result: buildResponse.data.result,
+            timestamp: buildResponse.data.timestamp,
+            duration: buildResponse.data.duration,
+            url: buildResponse.data.url,
           }, null, 2),
         },
       ],
@@ -329,6 +370,331 @@ class JenkinsServer {
           text: JSON.stringify({
             totalRunningBuilds: runningBuilds.length,
             builds: runningBuilds,
+          }, null, 2),
+        },
+      ],
+    };
+  }
+
+  private extractBuildParams(buildData: any): Record<string, string> {
+    const params: Record<string, string> = {};
+    const actions: any[] = buildData.actions || [];
+    for (const action of actions) {
+      if (Array.isArray(action.parameters)) {
+        for (const p of action.parameters) {
+          params[p.name] = String(p.value ?? '');
+        }
+      }
+    }
+    return params;
+  }
+
+  private paramsMatch(a: Record<string, string>, b: Record<string, string>): boolean {
+    const keysA = Object.keys(a).sort();
+    const keysB = Object.keys(b).sort();
+    if (keysA.length !== keysB.length) return false;
+    return keysA.every(k => a[k] === b[k]);
+  }
+
+  // Handles both single-SCM (changeSet) and multi-SCM (changeSets[]) Jenkins responses.
+  // Deduplicates by commitId across repos.
+  private extractAllCommits(buildData: any): { commitId: string; author: string | null; message: string; timestamp: number; repo: string | null; repoUrl: string | null }[] {
+    const seen = new Set<string>();
+    const commits: { commitId: string; author: string | null; message: string; timestamp: number; repo: string | null; repoUrl: string | null }[] = [];
+
+    const addItems = (items: any[], repoKind: string | null, remoteUrls: string[] | null) => {
+      const repoUrl = remoteUrls?.[0] || null;
+      for (const item of items || []) {
+        const id = item.commitId || item.id || item.revision;
+        if (id && seen.has(id)) continue;
+        if (id) seen.add(id);
+        commits.push({
+          commitId: id || null,
+          author: item.author?.fullName || null,
+          message: item.msg || item.comment || null,
+          timestamp: item.timestamp || item.date || null,
+          repo: repoKind,
+          repoUrl,
+        });
+      }
+    };
+
+    // Multi-SCM: changeSets is an array, one entry per repository
+    if (Array.isArray(buildData.changeSets) && buildData.changeSets.length > 0) {
+      for (const cs of buildData.changeSets) {
+        addItems(cs.items || [], cs.kind || null, cs.remoteUrls || null);
+      }
+    }
+
+    // Single-SCM fallback: changeSet (singular)
+    if (buildData.changeSet?.items?.length) {
+      addItems(buildData.changeSet.items, buildData.changeSet.kind || null, buildData.changeSet.remoteUrls || null);
+    }
+
+    return commits;
+  }
+
+  private jobPathToDisplayName(jobPath: string): string {
+    // Convert "job/ZVML/job/zvml-build-release/job/10.10" -> "ZVML/zvml-build-release/10.10"
+    if (jobPath.startsWith('job/')) {
+      return jobPath.split('/').filter((s: string) => s !== 'job').join('/');
+    }
+    return jobPath;
+  }
+
+  // Finds the downstream build triggered by a specific upstream (parent) build number,
+  // by inspecting the UpstreamCause in each downstream build's actions.
+  private async findDownstreamBuildByUpstreamCause(
+    downstreamJobPath: string,
+    parentJobDisplayName: string,
+    parentBuildNumber: number,
+    axiosInstance: any
+  ): Promise<{ number: number; result: string } | null> {
+    try {
+      const resp = await axiosInstance.get(
+        `/${downstreamJobPath}/api/json?tree=builds[number,result,actions[causes[upstreamBuild,upstreamProject]]]{0,50}`
+      );
+      const builds: any[] = resp.data.builds || [];
+      for (const build of builds) {
+        const actions: any[] = build.actions || [];
+        for (const action of actions) {
+          for (const cause of (action.causes || [])) {
+            if (
+              cause.upstreamBuild === parentBuildNumber &&
+              this.jobPathToDisplayName(cause.upstreamProject || '') === parentJobDisplayName
+            ) {
+              return { number: build.number, result: build.result };
+            }
+          }
+        }
+      }
+    } catch {
+      // downstream job inaccessible
+    }
+    return null;
+  }
+
+  private async getBuildChanges(args: any, axiosInstance: any) {
+    const buildNumber = args.buildNumber || 'lastBuild';
+    const jobPath = this.normalizeJobPath(args.jobPath);
+    const response = await axiosInstance.get(
+      `/${jobPath}/${buildNumber}/api/json?tree=number,result,changeSet[items[commitId,id,revision,author[fullName],msg,comment,timestamp,date],kind,remoteUrls],changeSets[items[commitId,id,revision,author[fullName],msg,comment,timestamp,date],kind,remoteUrls]`
+    );
+
+    const commits = this.extractAllCommits(response.data);
+
+    // Collect per-repo breakdown for multi-SCM jobs
+    const repoBreakdown: Record<string, number> = {};
+    for (const c of commits) {
+      const key = c.repo || 'unknown';
+      repoBreakdown[key] = (repoBreakdown[key] || 0) + 1;
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            buildNumber: response.data.number,
+            result: response.data.result,
+            totalCommits: commits.length,
+            repoBreakdown,
+            commits,
+          }, null, 2),
+        },
+      ],
+    };
+  }
+
+  private async findCulpritCommit(args: any, axiosInstance: any) {
+    const maxBuildsToSearch = args.maxBuildsToSearch || 20;
+    const jobPath = this.normalizeJobPath(args.jobPath);
+    const startBuildNumber = args.buildNumber || 'lastBuild';
+    const downstreamJobPaths: string[] = args.downstreamJobPaths || [];
+
+    const treeQuery = 'number,result,actions[parameters[name,value]],changeSet[items[commitId,id,revision,author[fullName],msg,comment,timestamp,date],kind,remoteUrls],changeSets[items[commitId,id,revision,author[fullName],msg,comment,timestamp,date],kind,remoteUrls]';
+
+    // Fetch the failing build
+    const startResponse = await axiosInstance.get(
+      `/${jobPath}/${startBuildNumber}/api/json?tree=${treeQuery}`
+    );
+    const failingBuildNumber: number = startResponse.data.number;
+    const failingResult: string = startResponse.data.result;
+    const failingParams = this.extractBuildParams(startResponse.data);
+    const parentJobDisplayName = this.jobPathToDisplayName(jobPath);
+
+    if (failingResult === 'SUCCESS') {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              message: `Build #${failingBuildNumber} is a SUCCESS — no culprit to find.`,
+              buildNumber: failingBuildNumber,
+              result: failingResult,
+            }, null, 2),
+          },
+        ],
+      };
+    }
+
+    const suspectBuilds: { buildNumber: number; result: string; commits: any[] }[] = [
+      { buildNumber: failingBuildNumber, result: failingResult, commits: this.extractAllCommits(startResponse.data) },
+    ];
+
+    let lastGoodBuild: number | null = null;
+    let skippedDueToParamMismatch = 0;
+
+    for (let i = 1; i <= maxBuildsToSearch; i++) {
+      const candidateBuild = failingBuildNumber - i;
+      if (candidateBuild < 1) break;
+
+      let buildData: any;
+      try {
+        const resp = await axiosInstance.get(
+          `/${jobPath}/${candidateBuild}/api/json?tree=${treeQuery}`
+        );
+        buildData = resp.data;
+      } catch {
+        continue;
+      }
+
+      // Skip builds with different parameters — they are not a valid baseline
+      const candidateParams = this.extractBuildParams(buildData);
+      if (!this.paramsMatch(failingParams, candidateParams)) {
+        skippedDueToParamMismatch++;
+        continue;
+      }
+
+      if (buildData.result === 'SUCCESS') {
+        lastGoodBuild = buildData.number;
+        break;
+      }
+
+      suspectBuilds.push({ buildNumber: buildData.number, result: buildData.result, commits: this.extractAllCommits(buildData) });
+    }
+
+    const parentSuspectCommits = suspectBuilds.flatMap(b =>
+      b.commits.map(c => ({ ...c, source: 'parent', introducedInBuild: b.buildNumber }))
+    );
+
+    // --- Downstream job traversal ---
+    // For each downstream job, find the build triggered by the failing parent via UpstreamCause,
+    // then walk back through that downstream job's history to find the culprit commits.
+    const downstreamResults: any[] = [];
+
+    for (const dsPath of downstreamJobPaths) {
+      const normalizedDs = this.normalizeJobPath(dsPath);
+
+      // Find the downstream build triggered by the failing parent
+      const triggeredBuild = await this.findDownstreamBuildByUpstreamCause(
+        normalizedDs,
+        parentJobDisplayName,
+        failingBuildNumber,
+        axiosInstance
+      );
+
+      if (!triggeredBuild) {
+        downstreamResults.push({
+          jobPath: dsPath,
+          status: 'not found — no build triggered by this parent build within the last 50 downstream runs',
+        });
+        continue;
+      }
+
+      if (triggeredBuild.result === 'SUCCESS' || triggeredBuild.result === null) {
+        downstreamResults.push({
+          jobPath: dsPath,
+          triggeredBuildNumber: triggeredBuild.number,
+          result: triggeredBuild.result,
+          status: 'passed — not a culprit source',
+        });
+        continue;
+      }
+
+      // The triggered downstream build failed — walk it back to find culprit commits
+      const dsSuspectBuilds: { buildNumber: number; result: string; commits: any[] }[] = [];
+      let dsLastGoodBuild: number | null = null;
+
+      try {
+        const dsFailResp = await axiosInstance.get(
+          `/${normalizedDs}/${triggeredBuild.number}/api/json?tree=${treeQuery}`
+        );
+        dsSuspectBuilds.push({
+          buildNumber: triggeredBuild.number,
+          result: triggeredBuild.result,
+          commits: this.extractAllCommits(dsFailResp.data),
+        });
+      } catch {
+        // skip if inaccessible
+      }
+
+      for (let j = 1; j <= maxBuildsToSearch; j++) {
+        const candidateDsBuild = triggeredBuild.number - j;
+        if (candidateDsBuild < 1) break;
+
+        let dsBuildData: any;
+        try {
+          const resp = await axiosInstance.get(
+            `/${normalizedDs}/${candidateDsBuild}/api/json?tree=${treeQuery}`
+          );
+          dsBuildData = resp.data;
+        } catch {
+          continue;
+        }
+
+        if (dsBuildData.result === 'SUCCESS') {
+          dsLastGoodBuild = dsBuildData.number;
+          break;
+        }
+
+        dsSuspectBuilds.push({
+          buildNumber: dsBuildData.number,
+          result: dsBuildData.result,
+          commits: this.extractAllCommits(dsBuildData),
+        });
+      }
+
+      const dsSuspectCommits = dsSuspectBuilds.flatMap(b =>
+        b.commits.map(c => ({ ...c, source: dsPath, introducedInBuild: b.buildNumber }))
+      );
+
+      downstreamResults.push({
+        jobPath: dsPath,
+        triggeredBuildNumber: triggeredBuild.number,
+        result: triggeredBuild.result,
+        lastGoodBuild: dsLastGoodBuild ?? 'not found within search range',
+        totalSuspectCommits: dsSuspectCommits.length,
+        suspectCommits: dsSuspectCommits,
+        buildRange: dsSuspectBuilds.map(b => ({
+          buildNumber: b.buildNumber,
+          result: b.result,
+          commitCount: b.commits.length,
+        })),
+      });
+    }
+
+    const totalSuspectCommits =
+      parentSuspectCommits.length +
+      downstreamResults.reduce((sum, r) => sum + (r.totalSuspectCommits || 0), 0);
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            failingBuild: failingBuildNumber,
+            buildParameters: failingParams,
+            lastGoodBuild: lastGoodBuild ?? 'not found within search range',
+            skippedBuildsWithDifferentParams: skippedDueToParamMismatch,
+            totalSuspectCommits,
+            parentSuspectCommits,
+            downstreamResults,
+            buildRange: suspectBuilds.map(b => ({
+              buildNumber: b.buildNumber,
+              result: b.result,
+              commitCount: b.commits.length,
+            })),
           }, null, 2),
         },
       ],
@@ -566,6 +932,32 @@ class JenkinsServer {
             properties: {},
           },
         },
+        {
+          name: 'get_build_changes',
+          description: 'Get the list of commits/changesets included in a specific Jenkins build',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              jobPath: { type: 'string', description: 'Path to the Jenkins job (e.g. "ZVML/zvml-build-release/10.10")' },
+              buildNumber: { type: 'string', description: 'Build number or "lastBuild"' },
+            },
+            required: ['jobPath'],
+          },
+        },
+        {
+          name: 'find_culprit_commit',
+          description: 'Find the commit(s) that likely caused a build failure. Walks back through builds with the same parameters to find the last successful baseline, then collects all commits introduced since. Optionally traverses downstream Pipeline jobs (triggered via "build job:") by matching the UpstreamCause to find which downstream build failed and what commits it introduced.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              jobPath: { type: 'string', description: 'Path to the Jenkins job (e.g. "ZVML/zvml-build-release/10.10")' },
+              buildNumber: { type: 'string', description: 'The failing build number or "lastBuild" (default: lastBuild)' },
+              maxBuildsToSearch: { type: 'number', description: 'Max number of previous builds to walk back through (default: 20)' },
+              downstreamJobPaths: { type: 'array', items: { type: 'string' }, description: 'Optional list of downstream job paths to inspect (e.g. ["ZVML/zvml-downstreams/zvml-build-frontend", "ZVML/zvml-downstreams/zvml-build-datapath"]). For each, the tool finds the build triggered by the failing parent via UpstreamCause, and if it failed, collects its suspect commits.' },
+            },
+            required: ['jobPath'],
+          },
+        },
       ],
     }));
 
@@ -584,6 +976,10 @@ class JenkinsServer {
             return await this.getAllNodes(request.params.arguments, axiosInstance);
           case 'get_running_builds':
             return await this.getRunningBuilds(request.params.arguments, axiosInstance);
+          case 'get_build_changes':
+            return await this.getBuildChanges(request.params.arguments, axiosInstance);
+          case 'find_culprit_commit':
+            return await this.findCulpritCommit(request.params.arguments, axiosInstance);
           default:
             throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
         }
