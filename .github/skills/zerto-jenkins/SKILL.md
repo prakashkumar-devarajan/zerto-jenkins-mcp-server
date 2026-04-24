@@ -11,28 +11,46 @@ Interact with Zerto's Jenkins CI/CD infrastructure to monitor builds, check node
 
 ### get_build_status
 Get the status of a Jenkins build including whether it's running, the result, duration, and URL.
-- **jobPath**: Path to the Jenkins job (use `job/FOLDER/job/SUBFOLDER/job/JOB` format for nested jobs)
-- **buildNumber**: Build number or "lastBuild" (optional, defaults to lastBuild)
+- **jobPath** *(required)*: Path to the Jenkins job (e.g. `"ZVML/zvml-build-release/10.10"`)
+- **buildNumber** *(optional)*: Build number or `"lastBuild"` (defaults to `lastBuild`)
+- Returns: `disabled`, `building`, `result`, `timestamp`, `duration`, `url`
 
 ### get_build_log
-Retrieve the full console output of a Jenkins build for debugging or analysis.
-- **jobPath**: Path to the Jenkins job
-- **buildNumber**: Build number to retrieve logs for
+Retrieve the console output of a Jenkins build with pagination support. Returns up to 500 lines by default.
+- **jobPath** *(required)*: Path to the Jenkins job
+- **buildNumber** *(required)*: Build number to retrieve logs for
+- **startLine** *(optional)*: Line offset to start from (default: `0`)
+- **maxLines** *(optional)*: Max lines to return (default: `500`)
+- Returns: log text + metadata (`totalLines`, `returnedLines`, `startLine`, `endLine`, `truncated`, `hint` for next page)
 
 ### build_job
-Trigger a Jenkins job with optional parameters. Automatically uses buildWithParameters when parameters are provided.
-- **jobPath**: Path to the Jenkins job
-- **parameters**: Optional object with build parameters
+Trigger a Jenkins job with optional parameters. Automatically uses `buildWithParameters` when parameters are provided.
+- **jobPath** *(required)*: Path to the Jenkins job
+- **parameters** *(optional)*: Object with build parameters (key/value pairs)
 
 ### search_jobs
 Search for Jenkins jobs by name keyword. Note: Only searches top-level jobs, not nested folders.
-- **query**: Search keyword for job names
+- **query** *(required)*: Search keyword for job names
 
 ### get_all_nodes
-Get status of all Jenkins nodes/agents including online status, idle state, executor count, and offline reasons.
+Get status of all Jenkins nodes/agents including online status, idle state, executor count, and offline reasons. No parameters required.
 
 ### get_running_builds
-List all currently running builds across Jenkins with job names, node assignments, timestamps, and progress.
+List all currently running builds across Jenkins with job names, node assignments, timestamps, and progress. No parameters required.
+
+### get_build_changes
+Get the list of commits/changesets included in a specific Jenkins build.
+- **jobPath** *(required)*: Path to the Jenkins job
+- **buildNumber** *(optional)*: Build number or `"lastBuild"` (defaults to `lastBuild`)
+- Returns: list of commits with author, message, hash, and changed files
+
+### find_culprit_commit
+Find the commit(s) that likely caused a build failure. Walks back through previous builds to find the last successful baseline, then collects all commits introduced since. Optionally traverses downstream Pipeline jobs (triggered via `build job:`) using `UpstreamCause` matching to find which downstream build failed and what commits it introduced.
+- **jobPath** *(required)*: Path to the Jenkins job
+- **buildNumber** *(optional)*: The failing build number or `"lastBuild"` (default: `lastBuild`)
+- **maxBuildsToSearch** *(optional)*: Max number of previous builds to walk back through (default: `20`)
+- **downstreamJobPaths** *(optional)*: Array of downstream job paths to also inspect (e.g. `["ZVML/zvml-downstreams/zvml-build-frontend", "ZVML/zvml-downstreams/zvml-build-datapath"]`). For each, the tool finds the build triggered by the failing parent via `UpstreamCause`, and if it failed, collects its suspect commits.
+- Returns: `parentSuspectCommits`, `downstreamResults`, `totalSuspectCommits`, `buildRange`
 
 ## Job Path Format
 
@@ -143,11 +161,52 @@ get_build_log(jobPath="job/ci_build_zvm_backend", buildNumber="48849")
 - If the downstream job itself triggered further downstream jobs, repeat this step recursively until you reach the actual failing step
 
 ### Step 4: Look for Error Patterns
-Common error patterns in .NET/MSBuild logs:
+
+> **Do not limit scanning to the examples below.** Read the full log content and apply general reasoning to identify any error, regardless of build system or language. The examples below are common fast-scan anchors — always look beyond them.
+
+Start near the **end of the log** (last 200–400 lines) where the terminal error is usually printed. Common patterns across build systems:
+
+**MSBuild / .NET:**
 - `error MSB3021`: File copy failures (often file locking issues)
 - `error MSB3073`: Command exited with non-zero code
 - `error CS`: C# compilation errors
-- `error :`: General build errors
+- `error :`: General MSBuild errors
+
+**Gradle / Java / Kotlin:**
+- `BUILD FAILED`
+- `> Task :xxx FAILED`
+- `Exception in thread "main"`
+- `java.lang.` / `kotlin.` exception traces
+
+**Docker / Container:**
+- `Error response from daemon:`
+- `failed to solve:`
+- `exit code:` in docker run output
+
+**Shell / Bash / PowerShell:**
+- `command not found`
+- `Exit status 1` / `exit code 1`
+- `The term '...' is not recognized`
+- `Access is denied`
+
+**Python:**
+- `Traceback (most recent call last):`
+- `ModuleNotFoundError` / `ImportError`
+- `SyntaxError`
+
+**NuGet / npm / pip package restore:**
+- `Unable to resolve` / `Package not found`
+- `npm ERR!`
+- `ERROR: Could not find a version`
+
+**Git / SCM:**
+- `fatal: unable to access`
+- `error: failed to push`
+- `Authentication failed`
+
+**General indicators (any build system):**
+- Lines containing `ERROR`, `FAILED`, `FATAL`, `Exception`, `Traceback`, `exit code [non-zero]`
+- Anything immediately before `Finished: FAILURE`
 
 ### Step 5: Classify the Failure
 
