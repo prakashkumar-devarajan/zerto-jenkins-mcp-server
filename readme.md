@@ -278,131 +278,127 @@ To use legacy SSE clients, configure:
 
 ### 1. Get Build Status
 
-Get the status of a Jenkins build:
-
-```typescript
-// Example usage
-const result = await mcpClient.useTool("jenkins-server", "get_build_status", {
-  jobPath: "view/xxx_debug",
-  buildNumber: "lastBuild"  // Optional, defaults to lastBuild
-});
-```
+Get the status of a Jenkins build including whether it's running, the result, duration, and URL.
 
 Input Schema:
 ```json
 {
-  "jobPath": "string",  // Path to Jenkins job
-  "buildNumber": "string"  // Optional, build number or "lastBuild"
+  "jobPath": "string",      // Required. Path to the Jenkins job (e.g. "ZVML/zvml-build-release/10.10")
+  "buildNumber": "string"   // Optional. Build number or "lastBuild" (default: lastBuild)
 }
 ```
+
+Returns: `disabled`, `building`, `result`, `timestamp`, `duration`, `url`
 
 ### 2. Get Build Log
 
-Retrieve the console output of a Jenkins build:
-
-```typescript
-// Example usage
-const result = await mcpClient.useTool("jenkins-server", "get_build_log", {
-  jobPath: "view/xxx_debug",
-  buildNumber: "lastBuild"
-});
-```
+Retrieve the console output of a Jenkins build with pagination support. Returns up to 500 lines by default; use `startLine` to paginate through large logs.
 
 Input Schema:
 ```json
 {
-  "jobPath": "string",  // Path to Jenkins job
-  "buildNumber": "string"  // Build number or "lastBuild"
+  "jobPath": "string",      // Required. Path to the Jenkins job
+  "buildNumber": "string",  // Required. Build number or "lastBuild"
+  "startLine": "number",    // Optional. Line offset to start from (default: 0)
+  "maxLines": "number"      // Optional. Max lines to return (default: 500)
 }
 ```
 
+Returns: log text + metadata (`totalLines`, `returnedLines`, `startLine`, `endLine`, `truncated`, `hint` with next page startLine).
+
 ### 3. Build Job
 
-Trigger a Jenkins job, automatically choosing between build and buildWithParameters:
-
-```typescript
-// Example usage
-const result = await mcpClient.useTool("jenkins-server", "build_job", {
-  jobPath: "job/ZVML/job/zvml_builds/job/ZVML_Services_Private",
-  parameters: {
-    BRANCH: "main"
-  }
-});
-```
+Trigger a Jenkins job. Automatically uses `buildWithParameters` when parameters are provided.
 
 Input Schema:
 ```json
 {
-  "jobPath": "string",  // Path to Jenkins job
-  "parameters": {  // Optional
-    // Build parameters as key-value pairs
+  "jobPath": "string",      // Required. Path to the Jenkins job
+  "parameters": {           // Optional. Build parameters as key-value pairs
+    "BRANCH": "main"
   }
 }
 ```
 
 ### 4. Search Jobs
 
-Search for Jenkins jobs by name:
-
-```typescript
-// Example usage
-const result = await mcpClient.useTool("jenkins-server", "search_jobs", {
-  query: "zvml"
-});
-```
+Search for Jenkins jobs by name keyword. Searches top-level jobs only (not nested folders).
 
 Input Schema:
 ```json
 {
-  "query": "string"  // Search keyword for job names
+  "query": "string"   // Required. Search keyword for job names
 }
 ```
 
 ### 5. Get All Nodes
 
-Get all Jenkins nodes (agents) and their status:
+Get all Jenkins nodes (agents) and their status. No parameters required.
 
-```typescript
-// Example usage
-const result = await mcpClient.useTool("jenkins-server", "get_all_nodes", {});
-```
-
-Input Schema:
-```json
-{
-  // No input parameters required
-}
-```
-
-Returns information about all nodes including:
+Returns for each node:
 - Display name
 - Online/offline status
 - Idle status
 - Temporarily offline status
 - Offline cause reason
 - Number of executors
+- Summary totals (total / online / offline)
 
 ### 6. Get Running Builds
 
-Get all currently running builds across all Jenkins jobs:
+Get all currently running builds across all Jenkins jobs. No parameters required.
 
-```typescript
-// Example usage
-const result = await mcpClient.useTool("jenkins-server", "get_running_builds", {});
-```
+Returns:
+- Total count of running builds
+- For each build: full display name, URL, timestamp, estimated duration, node name
+
+### 7. Get Build Changes
+
+Get the list of commits/changesets included in a specific Jenkins build. Supports both single-SCM and multi-SCM (parallel checkout) jobs, deduplicating commits across repos.
 
 Input Schema:
 ```json
 {
-  // No input parameters required
+  "jobPath": "string",      // Required. Path to the Jenkins job
+  "buildNumber": "string"   // Optional. Build number or "lastBuild" (default: lastBuild)
+}
+```
+
+Returns: `buildNumber`, `result`, `totalCommits`, `repoBreakdown` (per-repo commit count), and a `commits` array with:
+- `commitId`
+- `author`
+- `message`
+- `timestamp`
+- `repo` (SCM kind)
+- `repoUrl`
+
+### 8. Find Culprit Commit
+
+Find the commit(s) that likely caused a build failure. Walks back through previous builds (with matching parameters) to find the last successful baseline, then collects all commits introduced since.
+
+Optionally traverses downstream Pipeline jobs triggered via `build job:` steps, using `UpstreamCause` matching to identify which downstream build was triggered by the failing parent and whether it failed.
+
+Input Schema:
+```json
+{
+  "jobPath": "string",             // Required. Path to the Jenkins job
+  "buildNumber": "string",         // Optional. Failing build number or "lastBuild" (default: lastBuild)
+  "maxBuildsToSearch": "number",   // Optional. Max builds to walk back through (default: 20)
+  "downstreamJobPaths": ["string"] // Optional. List of downstream job paths to also inspect.
+                                   // Example: ["ZVML/zvml-downstreams/zvml-build-frontend"]
 }
 ```
 
 Returns:
-- Total count of running builds
-- List of builds with:
-  - Full display name
-  - Build URL
-  - Timestamp
-  - Estimated duration
-  - Node name where build is executing
+- `failingBuild`: the failing build number
+- `buildParameters`: parameters used in the failing build
+- `lastGoodBuild`: last build that passed (or "not found within search range")
+- `skippedBuildsWithDifferentParams`: number of builds skipped due to parameter mismatch
+- `totalSuspectCommits`: total count across parent + all downstream jobs
+- `parentSuspectCommits`: commits introduced in the parent job since the last good build
+- `downstreamResults`: per-downstream-job results, each containing:
+  - `triggeredBuildNumber`: which downstream build was triggered by the failing parent
+  - `result`: the downstream build result
+  - `lastGoodBuild`: last passing build in that downstream job
+  - `suspectCommits`: commits introduced in that downstream job
+- `buildRange`: summary of each build checked (number, result, commit count)
