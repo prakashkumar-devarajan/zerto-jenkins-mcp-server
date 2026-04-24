@@ -320,7 +320,20 @@ Input Schema:
 }
 ```
 
-### 4. Search Jobs
+### 4. List Jobs
+
+List all child jobs inside a Jenkins folder. Use this to auto-discover sub-jobs (e.g. version branches) without needing to know their names in advance.
+
+Input Schema:
+```json
+{
+  "folderPath": "string"   // Required. Path to the Jenkins folder (e.g. "ZVML/zvml-build-release")
+}
+```
+
+Returns: `folderPath`, `totalJobs`, and for each job: `name`, `url`, `disabled` (normalized from both `disabled` field and `color === 'disabled'`), `_class`.
+
+### 5. Search Jobs
 
 Search for Jenkins jobs by name keyword. Searches top-level jobs only (not nested folders).
 
@@ -331,7 +344,7 @@ Input Schema:
 }
 ```
 
-### 5. Get All Nodes
+### 6. Get All Nodes
 
 Get all Jenkins nodes (agents) and their status. No parameters required.
 
@@ -344,7 +357,7 @@ Returns for each node:
 - Number of executors
 - Summary totals (total / online / offline)
 
-### 6. Get Running Builds
+### 7. Get Running Builds
 
 Get all currently running builds across all Jenkins jobs. No parameters required.
 
@@ -352,7 +365,7 @@ Returns:
 - Total count of running builds
 - For each build: full display name, URL, timestamp, estimated duration, node name
 
-### 7. Get Build Changes
+### 8. Get Build Changes
 
 Get the list of commits/changesets included in a specific Jenkins build. Supports both single-SCM and multi-SCM (parallel checkout) jobs, deduplicating commits across repos.
 
@@ -372,7 +385,7 @@ Returns: `buildNumber`, `result`, `totalCommits`, `repoBreakdown` (per-repo comm
 - `repo` (SCM kind)
 - `repoUrl`
 
-### 8. Find Culprit Commit
+### 9. Find Culprit Commit
 
 Find the commit(s) that likely caused a build failure. Walks back through previous builds (with matching parameters) to find the last successful baseline, then collects all commits introduced since.
 

@@ -44,6 +44,11 @@ Get the list of commits/changesets included in a specific Jenkins build.
 - **buildNumber** *(optional)*: Build number or `"lastBuild"` (defaults to `lastBuild`)
 - Returns: list of commits with author, message, hash, and changed files
 
+### list_jobs
+List all child jobs inside a Jenkins folder. Use this to auto-discover sub-jobs (e.g. version branches) without needing to know their names in advance.
+- **folderPath** *(required)*: Path to the Jenkins folder (e.g. `"ZVML/zvml-build-release"`)
+- Returns: `folderPath`, `totalJobs`, and for each job: `name`, `url`, `disabled`, `_class`
+
 ### find_culprit_commit
 Find the commit(s) that likely caused a build failure. Walks back through previous builds to find the last successful baseline, then collects all commits introduced since. Optionally traverses downstream Pipeline jobs (triggered via `build job:`) using `UpstreamCause` matching to find which downstream build failed and what commits it introduced.
 - **jobPath** *(required)*: Path to the Jenkins job
@@ -116,11 +121,11 @@ When listing official builds, always filter out any job where `disabled: true`.
 
 ### How to Query Official Builds
 
-The MCP server cannot auto-discover sub-jobs inside a folder. Use this workflow:
+Use `list_jobs` to auto-discover all sub-jobs in a folder, then query only the enabled ones:
 
-1. Ask the user which version sub-jobs exist (e.g. `10.11.0`, `10.9.10`, `10.9.0`, `10.8.20`, `10.6.50`)
-2. Call `get_build_status` with `buildNumber="lastBuild"` for each version under both ZVML and ZVM folders in parallel
-3. Filter out any where `disabled: true`
+1. Call `list_jobs(folderPath="ZVML/zvml-build-release")` to get all version sub-jobs with their `disabled` status
+2. Filter out any where `disabled: true`
+3. Call `get_build_status` with `buildNumber="lastBuild"` for each enabled version in parallel
 4. Report only the active ones
 
 ### Example Prompts for Official Builds

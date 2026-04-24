@@ -154,6 +154,17 @@ class JenkinsServer {
             required: ['jobPath'],
           },
         },
+        {
+          name: 'list_jobs',
+          description: 'List all child jobs inside a Jenkins folder. Use this to auto-discover sub-jobs (e.g. version branches) under a given folder path without needing to know their names in advance.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              folderPath: { type: 'string', description: 'Path to the Jenkins folder (e.g. "ZVML/zvml-build-release")' },
+            },
+            required: ['folderPath'],
+          },
+        },
       ],
     }));
   
@@ -176,6 +187,8 @@ class JenkinsServer {
             return await this.getBuildChanges(request.params.arguments, this.axiosInstance);
           case 'find_culprit_commit':
             return await this.findCulpritCommit(request.params.arguments, this.axiosInstance);
+          case 'list_jobs':
+            return await this.listJobs(request.params.arguments, this.axiosInstance);
           default:
             throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
         }
@@ -701,6 +714,31 @@ class JenkinsServer {
     };
   }
 
+  private async listJobs(args: any, axiosInstance: any) {
+    const folderPath = this.normalizeJobPath(args.folderPath);
+    const response = await axiosInstance.get(
+      `/${folderPath}/api/json?tree=jobs[name,url,disabled,color,_class]`
+    );
+    const jobs = response.data.jobs || [];
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            folderPath: args.folderPath,
+            totalJobs: jobs.length,
+            jobs: jobs.map((j: any) => ({
+              name: j.name,
+              url: j.url,
+              disabled: j.disabled === true || j.color === 'disabled',
+              _class: j._class,
+            })),
+          }, null, 2),
+        },
+      ],
+    };
+  }
+
   async run() {
     const serverMode = process.env.SERVER_MODE || 'stdio';
     
@@ -958,6 +996,17 @@ class JenkinsServer {
             required: ['jobPath'],
           },
         },
+        {
+          name: 'list_jobs',
+          description: 'List all child jobs inside a Jenkins folder. Use this to auto-discover sub-jobs (e.g. version branches) under a given folder path without needing to know their names in advance.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              folderPath: { type: 'string', description: 'Path to the Jenkins folder (e.g. "ZVML/zvml-build-release")' },
+            },
+            required: ['folderPath'],
+          },
+        },
       ],
     }));
 
@@ -980,6 +1029,8 @@ class JenkinsServer {
             return await this.getBuildChanges(request.params.arguments, axiosInstance);
           case 'find_culprit_commit':
             return await this.findCulpritCommit(request.params.arguments, axiosInstance);
+          case 'list_jobs':
+            return await this.listJobs(request.params.arguments, axiosInstance);
           default:
             throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
         }
