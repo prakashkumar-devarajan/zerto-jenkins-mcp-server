@@ -157,13 +157,32 @@ Search the log for:
 - Downstream job names with build numbers (e.g., `ci_build_zvm_backend #48849`)
 - Stage names like "Failed in branch BuildBackend"
 
-### Step 3: Drill Into Failed Downstream Job (ALWAYS DO THIS)
-Once you identify the failed downstream job, **always** retrieve and read its log — never stop at the parent:
+### Step 3: Drill Into Failed Downstream Jobs — Recursively Until the Leaf (ALWAYS DO THIS)
+
+**CRITICAL RULE**: Never stop investigating at the parent build log. You MUST keep drilling into downstream jobs, level by level, until you reach the innermost job that has no further downstream — that is the actual root cause.
+
+Once you identify a failed downstream job from a parent log, immediately retrieve and read its log:
 ```
 get_build_log(jobPath="job/ci_build_zvm_backend", buildNumber="48849")
 ```
-- Read from the **end** of the log first (last 200–400 lines) to find the actual error
-- If the downstream job itself triggered further downstream jobs, repeat this step recursively until you reach the actual failing step
+
+For each log you read:
+1. Look for lines matching `completed: ABORTED`, `completed: FAILURE`, or `Failed in branch <name>`
+2. Extract the downstream job name and build number from those lines
+3. Call `get_build_log` on that downstream job
+4. Repeat steps 1–3 until the log shows **no further downstream jobs** — only then have you found the real root cause
+
+**Example traversal** (do not stop early):
+```
+Parent build log         → "zvml-build-frontend #52031 completed: ABORTED"
+  → zvml-build-frontend  → "frontend_orchestrator_release/10.9.0 #1153 completed: ABORTED"
+    → frontend_orchestrator → "ci_upload_frontend_zvml_docker #5091 completed: ABORTED"
+      → ci_upload_frontend_zvml_docker → "Timeout has been exceeded during Artifactory upload" ← REAL ROOT CAUSE
+```
+
+- Always read from the **end** of the log first (last 200–400 lines) where terminal errors appear
+- If a downstream job path is not immediately obvious, use `list_jobs` or `search_jobs` to locate it
+- Never report "X was aborted/failed" as the root cause if X itself triggered further downstream jobs
 
 ### Step 4: Look for Error Patterns
 
