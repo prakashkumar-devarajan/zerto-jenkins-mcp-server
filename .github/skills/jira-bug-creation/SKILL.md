@@ -314,6 +314,24 @@ Use the template above with actual values
 ### Step 4: Verify Creation
 Query the created ticket to confirm all fields populated correctly
 
+### Step 5: Update Final Build Investigation Summary
+After Jira bug creation succeeds, always update the final investigation summary to include the new Jira ID.
+
+Required updates in the final summary:
+- Add a prominent Jira line near the top: `Jira Ticket: ZER-XXXXX`
+- Include the full Jira URL: `https://zerto.atlassian.net/browse/ZER-XXXXX`
+- In Root Cause/Action Items, state: `Tracked in ZER-XXXXX`
+- If the same root cause already exists, explicitly mark it as duplicate and reuse the same Jira ID
+
+Use this snippet in the final investigation summary:
+
+```markdown
+### Jira Tracking
+- Jira Ticket: [ZER-XXXXX](https://zerto.atlassian.net/browse/ZER-XXXXX)
+- Status: Created
+- Notes: Build failure root cause is tracked under this ticket.
+```
+
 ## Updates & Maintenance
 
 This skill should be updated when:
