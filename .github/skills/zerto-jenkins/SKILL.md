@@ -138,7 +138,7 @@ Use `list_jobs` to auto-discover all sub-jobs in a folder, then query only the e
 
 ## Failure Investigation Methodology
 
-> **MANDATORY BEHAVIOR**: Whenever a build failure is reported or discovered, ALWAYS perform the full investigation below — do not stop at the parent build log. Automatically drill into failing downstream jobs, read their logs, classify the failure, and if it is a code issue, automatically run `find_culprit_commit` to identify the responsible commit. Do not ask the user whether to proceed — just do it.
+> **MANDATORY BEHAVIOR**: Whenever a build failure is reported or discovered, ALWAYS perform the full investigation below — do not stop at the parent build log. Automatically drill into failing downstream jobs, read their logs, classify the failure, and if it is a code issue, automatically run `find_culprit_commit` to identify the responsible commit. Then perform merge-aware Jira correlation to find the ticket tied to the actual introducing code change. Do not ask the user whether to proceed — just do it.
 
 When a build fails, use this drill-down approach to find the root cause:
 
@@ -257,6 +257,36 @@ find_culprit_commit(
 - Compare the failing build against the most recent **previously passing** build
 - Report the suspect commit(s): author, commit hash, commit message, and timestamp
 - Cross-reference the changed files with the error to confirm relevance
+
+### Step 7: Correlate Jira Ticket to the Actual Introducing Change (For Code Issues ONLY)
+
+After identifying suspect commit(s), find the Jira ticket that best matches the code change that actually introduced the failure. Use the Jira key format `ZER-<number>`.
+
+1. Identify the **original introducing commit**, not only the top-level failing commit:
+- If the failing commit is a regular commit, use it directly.
+- If it is a merge commit, walk parent history and isolate the child commit that introduced the breaking line/symbol.
+- If it is a squash merge, treat the associated PR as source of truth and verify changed files/symbols match the failure.
+- If it is a rebase flow, evaluate each linear commit in the failure window and pick the commit with strongest match to the failing file/symbol/test.
+
+2. Resolve the PR associated with the original introducing commit.
+
+3. Extract Jira keys matching `ZER-[0-9]+` from:
+- Commit message(s)
+- PR title
+- PR body
+- PR comments/review discussion
+
+4. Rank candidate Jira tickets by relevance:
+- Direct reference to failing file/symbol/component (highest)
+- Presence in PR tied to original introducing commit
+- Presence only in top-level merge PR (lower)
+
+5. Report:
+- `best_correlated_jira`
+- `jira_candidates`
+- `correlation_reason` with concrete evidence (failing line, introducing commit, PR excerpt)
+
+If no Jira is found, return `NO_JIRA_FOUND` and include supporting evidence.
 
 ### Example: ZVM 10.9.0 #1592 Analysis
 | Level | Job | Finding |
